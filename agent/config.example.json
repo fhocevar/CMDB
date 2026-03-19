@@ -1,0 +1,11 @@
+{
+  "api_base_url": "http://localhost:8000",
+  "agent_token": "agent-default-token",
+  "agent_version": "2.2.0",
+  "environment": "PRD",
+  "criticality": "MEDIA",
+  "business_service": "INFRAESTRUTURA",
+  "asset_type": "SERVER",
+  "network_mbps": 1000,
+  "interval_seconds": 60
+}

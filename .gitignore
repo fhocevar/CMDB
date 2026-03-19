@@ -1,0 +1,106 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Virtual environment
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+*.env
+secrets/
+*.key
+*.pem
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+*.out
+*.err
+
+# =========================
+# Database local
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+
+# =========================
+# Test / coverage / cache
+# =========================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# =========================
+# Build / packaging
+# =========================
+dist/
+build/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Arquivos temporários
+# =========================
+tmp/
+temp/
+*.tmp
+
+# =========================
+# Exportações / relatórios
+# =========================
+exports/
+reports/
+
+# =========================
+# Docker / DevOps
+# =========================
+*.tar
+*.gz
+*.zip
+
+# =========================
+# Kubernetes / infra local
+# =========================
+*.kube/config
+
+# =========================
+# Coverage / profiling
+# =========================
+.prof
