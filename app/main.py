@@ -16,6 +16,7 @@ from app.core.scheduler import start_scheduler
 from app.core.security import hash_password
 from app.models.threshold_policy import ThresholdPolicy
 from app.models.user import User
+from app.api.routes import applications
 
 app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
 
@@ -93,7 +94,7 @@ app.include_router(discovery_router)
 app.include_router(agents_router)
 app.include_router(integrations_router)
 app.include_router(exports_router)
-
+app.include_router(applications.router)
 
 @app.get("/")
 def healthcheck():

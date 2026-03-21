@@ -2,7 +2,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     APP_NAME: str = "ITIL Capacity Management API V2.2"
     DEBUG: bool = True
@@ -41,6 +45,13 @@ class Settings(BaseSettings):
     ARGOCD_METRICS_URL: str = ""
     ARGOCD_NAMESPACE: str = "argocd"
 
+    ARGOCD_URL: str = ""
+    ARGOCD_USERNAME: str = ""
+    ARGOCD_PASSWORD: str = ""
+    ARGOCD_VERIFY_TLS: bool = False
+
+    CRITICAL_APPS: str = ""
+
     DISCOVERY_PING_ENABLED: bool = True
     DISCOVERY_SSH_ENABLED: bool = False
     DISCOVERY_SNMP_ENABLED: bool = False
@@ -60,6 +71,10 @@ class Settings(BaseSettings):
     @property
     def discovery_networks(self) -> list[str]:
         return [item.strip() for item in self.DISCOVERY_NETWORKS.split(",") if item.strip()]
+
+    @property
+    def critical_apps(self) -> list[str]:
+        return [item.strip() for item in self.CRITICAL_APPS.split(",") if item.strip()]
 
 
 settings = Settings()

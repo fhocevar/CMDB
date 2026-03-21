@@ -10,6 +10,7 @@ from app.models.threshold_policy import ThresholdPolicy
 from app.schemas.dashboard import CapacityStatusItem, DashboardSummary
 from app.services.forecast_service import forecast_metric_30d
 
+
 SUPPORTED_METRICS = [
     "cpu_percent",
     "memory_percent",
@@ -21,6 +22,41 @@ SUPPORTED_METRICS = [
     "argocd_sync_state",
     "argocd_health_state",
 ]
+
+
+def calculate_capacity(deployment: dict) -> dict:
+    replicas = deployment.get("replicas", 1)
+    cpu = deployment.get("cpu_limit", 0)
+    memory = deployment.get("memory_limit", 0)
+
+    reasons = []
+    status = "SAUDAVEL"
+
+    if replicas == 1:
+        status = "CRITICO"
+        reasons.append("Sem alta disponibilidade (replicas=1)")
+    elif replicas == 2 and status != "CRITICO":
+        status = "ATENCAO"
+        reasons.append("Baixa redundância (replicas=2)")
+
+    if cpu < 50:
+        status = "CRITICO"
+        reasons.append("CPU muito baixo")
+    elif cpu < 100 and status != "CRITICO":
+        status = "ATENCAO"
+        reasons.append("CPU abaixo do ideal")
+
+    if memory < 128:
+        status = "CRITICO"
+        reasons.append("Memória muito baixa")
+    elif memory < 256 and status != "CRITICO":
+        status = "ATENCAO"
+        reasons.append("Memória abaixo do ideal")
+
+    return {
+        "status": status,
+        "reasons": reasons,
+    }
 
 
 def _derive_status(utilization_percent: float, warning: float, critical: float, saturation: float) -> str:
