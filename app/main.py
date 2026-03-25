@@ -10,13 +10,16 @@ from app.api.routes.exports import router as exports_router
 from app.api.routes.integrations import router as integrations_router
 from app.api.routes.metrics import router as metrics_router
 from app.api.routes.thresholds import router as thresholds_router
+from app.api.routes import applications
 from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
 from app.core.scheduler import start_scheduler
 from app.core.security import hash_password
+
+# IMPORTS DOS MODELS QUE PRECISAM ESTAR REGISTRADOS NO METADATA
+from app.models.app_capacity_snapshot import AppCapacitySnapshot
 from app.models.threshold_policy import ThresholdPolicy
 from app.models.user import User
-from app.api.routes import applications
 
 app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
 
@@ -95,6 +98,7 @@ app.include_router(agents_router)
 app.include_router(integrations_router)
 app.include_router(exports_router)
 app.include_router(applications.router)
+
 
 @app.get("/")
 def healthcheck():
