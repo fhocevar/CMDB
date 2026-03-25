@@ -10,6 +10,12 @@ def list_capacity():
     return service.list_critical_apps()
 
 
+@router.get("/capacity/summary")
+def get_capacity_summary():
+    service = ApplicationService()
+    return service.summarize_applications()
+
+
 @router.get("/capacity/{app_name}")
 def get_capacity(app_name: str):
     service = ApplicationService()

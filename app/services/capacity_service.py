@@ -14,6 +14,7 @@ from app.services.forecast_service import forecast_metric_30d
 SUPPORTED_METRICS = [
     "cpu_percent",
     "memory_percent",
+    "memory_mb_used",
     "disk_percent",
     "network_percent",
     "container_cpu_percent",

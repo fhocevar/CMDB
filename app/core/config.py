@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     KUBERNETES_API_URL: str = ""
     KUBERNETES_BEARER_TOKEN: str = ""
     KUBERNETES_VERIFY_TLS: bool = False
+    KUBERNETES_CLUSTER_NAME: str = "aks-default"
 
     ZABBIX_ENABLED: bool = False
     ZABBIX_URL: str = ""
