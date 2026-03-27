@@ -1,92 +1,296 @@
+
 # ITIL Capacity Management API V2.2
 
-Projeto pronto para abrir no VS Code com:
+Plataforma de **CMDB + Capacity + Observabilidade de Deploy** baseada em:
 
-- FastAPI
-- PostgreSQL
-- Discovery básico
-- Agent para hosts Windows/Linux
-- Coleta de containers Docker
-- Integrações com Prometheus, Kubernetes, Argo CD, Zabbix e VMware
-- Dashboard e exportação CSV
+- FastAPI (backend)
+- PostgreSQL (persistência)
+- Argo CD (fonte de deploy)
+- Streamlit (dashboard opcional)
+- Integrações com Prometheus, Kubernetes, Zabbix, VMware
 
-## Como rodar
+---
 
-### Opção 1: Docker
+# 🚀 Principais funcionalidades
+
+## 🔹 CMDB & Capacity
+- Cadastro e gestão de ativos
+- Coleta de métricas
+- Thresholds por tipo de ativo
+- Cálculo de capacity
+
+## 🔹 Argo CD (NOVO 🔥)
+- Inventário completo de aplicações
+- Estado de deploy (sync / health)
+- Detecção de drift (OutOfSync)
+- Detecção de falhas (Degraded / Missing)
+- Histórico de execuções
+- Topologia de recursos Kubernetes (via Argo)
+- Extração de imagens e versões
+
+## 🔹 Capacity Score (NOVO 🔥)
+Score de 0 a 100 baseado em:
+- Health status
+- Sync status
+- Falhas de operação
+- Recursos degradados
+- Conditions
+- Governança (auto-sync, self-heal)
+
+Classificação:
+- `SAUDAVEL`
+- `ATENCAO`
+- `CRITICO`
+- `SATURADO`
+
+## 🔹 Dashboard
+- Dashboard HTML estilo Grafana (embutido na API)
+- Dashboard Streamlit (opcional, mais avançado)
+- Histórico de capacity
+- Ranking de aplicações críticas
+
+---
+
+# 🏗️ Arquitetura
+
+```
+
+Argo CD → FastAPI → PostgreSQL → Dashboard (HTML / Streamlit)
+
+````
+
+---
+
+# ▶️ Como rodar
+
+## 🔹 Opção 1: Docker
 
 ```bash
 docker compose up --build
-```
+````
 
-### Opção 2: Local
+Acessos:
+
+* API: [http://localhost:8000](http://localhost:8000)
+* Swagger: [http://localhost:8000/docs](http://localhost:8000/docs)
+* Dashboard HTML: [http://localhost:8000/applications/capacity/dashboard/html](http://localhost:8000/applications/capacity/dashboard/html)
+
+---
+
+## 🔹 Opção 2: Local
 
 ```bash
 python -m venv .venv
-source .venv/Scripts/activate  # Git Bash no Windows
+source .venv/Scripts/activate  # Git Bash (Windows)
+
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-## Credenciais iniciais
+---
 
-- usuário: `admin`
-- senha: `admin123`
+# 🔐 Credenciais iniciais
 
-## Estrutura principal
+* usuário: `admin`
+* senha: `admin123`
 
-- `app/main.py`
-- `app/api/routes/`
-- `app/core/`
-- `app/models/`
-- `app/services/`
-- `app/integrations/`
-- `agent/agent.py`
-- `.env`
-- `docker-compose.yml`
+---
 
-## Endpoints principais
+# 📊 Dashboard
 
-### Saúde
-- `GET /`
+## 🔹 HTML (embutido)
 
-### Autenticação
-- `POST /auth/login`
+```
+GET /applications/capacity/dashboard/html
+```
 
-### Ativos
-- `POST /assets/`
-- `GET /assets/`
+## 🔹 JSON
 
-### Métricas
-- `POST /metrics/`
+```
+GET /applications/capacity/dashboard
+```
 
-### Thresholds
-- `POST /thresholds/`
-- `GET /thresholds/`
+## 🔹 Histórico
 
-### Dashboard
-- `GET /dashboard/capacity?hours=24`
+```
+GET /applications/capacity/history?days=30
+```
 
-### Discovery
-- `POST /discovery/run`
+---
 
-### Agent
-- `POST /agents/register`
-- `POST /agents/heartbeat`
-- `POST /agents/metrics`
+# 🧠 Capacity (Argo CD)
 
-### Integrações
-- `POST /integrations/prometheus/run`
-- `POST /integrations/kubernetes/run`
-- `POST /integrations/argocd/run`
-- `POST /integrations/zabbix/run`
-- `POST /integrations/vmware/run`
+## 🔹 Coletar snapshot (persiste no banco)
 
-### Exportação
-- `GET /exports/capacity.csv?hours=24`
+```
+POST /applications/capacity/collect
+```
 
-## Observações
+## 🔹 Listar aplicações (live)
 
-- As integrações de Zabbix, VMware e parte do discovery SNMP estão como base pronta para adaptação ao ambiente.
-- O endpoint Kubernetes espera acesso ao Metrics API.
-- O endpoint Argo CD consome o endpoint de métricas Prometheus do Argo CD.
-- O agent coleta host + Docker local no mesmo equipamento.
+```
+GET /applications/capacity
+```
+
+## 🔹 Detalhar aplicação
+
+```
+GET /applications/capacity/{app_name}
+```
+
+---
+
+# 📈 Streamlit (opcional 🔥)
+
+## Instalar
+
+```bash
+pip install -r requirements-streamlit.txt
+```
+
+## Rodar
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Acesso:
+
+```
+http://localhost:8501
+```
+
+## Docker (opcional)
+
+Adicionar no `docker-compose.yml`:
+
+```yaml
+streamlit:
+  image: python:3.12-slim
+  working_dir: /app
+  volumes:
+    - .:/app
+  command: >
+    sh -c "pip install -r requirements-streamlit.txt &&
+           streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0"
+  environment:
+    API_BASE_URL: http://api:8000
+  ports:
+    - "8501:8501"
+```
+
+---
+
+# 📦 Estrutura principal
+
+```
+app/
+  main.py
+  api/routes/
+  core/
+  models/
+    app_capacity_snapshot.py  # NOVO
+  services/
+    application_service.py    # NOVO (capacity + score)
+  integrations/
+```
+
+---
+
+# 📊 Banco de dados
+
+Tabela nova:
+
+### `app_capacity_snapshots`
+
+Armazena:
+
+* aplicação
+* projeto / namespace
+* status (sync / health)
+* operação (phase, duration, erro)
+* recursos (degraded, missing, etc)
+* imagens
+* capacity_score
+* capacity_status
+* reasons
+* run_id (execução)
+
+---
+
+# 🔌 Integrações
+
+### Prometheus
+
+```
+POST /integrations/prometheus/run
+```
+
+### Kubernetes
+
+```
+POST /integrations/kubernetes/run
+```
+
+### Argo CD
+
+```
+POST /integrations/argocd/run
+```
+
+### Zabbix
+
+```
+POST /integrations/zabbix/run
+```
+
+### VMware
+
+```
+POST /integrations/vmware/run
+```
+
+---
+
+# 🤖 Agent
+
+* `POST /agents/register`
+* `POST /agents/heartbeat`
+* `POST /agents/metrics`
+
+---
+
+# 🔎 Discovery
+
+```
+POST /discovery/run
+```
+
+---
+
+# 📤 Exportação
+
+```
+GET /exports/capacity.csv?hours=24
+```
+
+---
+
+# ⚠️ Observações importantes
+
+* Argo CD não fornece métricas reais de CPU/memória (somente estado de deploy)
+* Capacity Score é baseado em risco operacional (não consumo real)
+* Para métricas reais, integrar com:
+
+  * Kubernetes API
+  * Prometheus
+
+---
+
+# 🚀 Próximos passos recomendados
+
+* Agendamento automático de coleta (scheduler)
+* Alertas (Teams / Email)
+* Filtros avançados no Streamlit
+* Comparação entre execuções (diff)
+* Integração com Prometheus para capacity real

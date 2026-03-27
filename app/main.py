@@ -59,6 +59,18 @@ def seed_admin_and_thresholds():
             ("K8S_POD", "cpu_percent", 75, 90, 95),
             ("ARGOCD_APPLICATION", "argocd_sync_state", 1, 50, 100),
             ("ARGOCD_APPLICATION", "argocd_health_state", 1, 50, 100),
+            ("JENKINS_AGENT", "jenkins_executor_usage_percent", 70, 85, 95),
+            ("JENKINS_CONTROLLER", "jenkins_executor_usage_percent", 70, 85, 95),
+            ("JENKINS_AGENT", "jenkins_offline_state", 1, 50, 100),
+            ("JENKINS_CONTROLLER", "jenkins_offline_state", 1, 50, 100),
+            ("JENKINS_AGENT", "jenkins_temp_offline_state", 1, 50, 100),
+            ("JENKINS_CONTROLLER", "jenkins_temp_offline_state", 1, 50, 100),
+
+            ("ELASTIC_HOST", "elastic_host_cpu_percent", 70, 85, 95),
+            ("ELASTIC_HOST", "elastic_host_memory_percent", 75, 90, 97),
+            ("ELASTIC_HOST", "elastic_host_disk_percent", 80, 90, 95),
+            ("ELASTIC_K8S_POD", "elastic_k8s_pod_cpu_percent", 75, 90, 95),
+            ("ELASTIC_DOCKER_CONTAINER", "elastic_docker_cpu_percent", 75, 90, 95),
         ]
 
         for asset_type, metric_type, warning, critical, saturation in defaults:

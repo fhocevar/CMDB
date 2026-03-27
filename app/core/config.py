@@ -62,6 +62,18 @@ class Settings(BaseSettings):
     DISCOVERY_SSH_PASSWORD: str = ""
     DISCOVERY_SNMP_COMMUNITY: str = "public"
 
+    JENKINS_ENABLED: bool = False
+    JENKINS_URL: str = ""
+    JENKINS_USER: str = ""
+    JENKINS_PASSWORD: str = ""
+    JENKINS_VERIFY_TLS: bool = False
+
+    ELASTICSEARCH_ENABLED: bool = False
+    ELASTICSEARCH_URL: str = ""
+    ELASTICSEARCH_USER: str = ""
+    ELASTICSEARCH_PASSWORD: str = ""
+    ELASTICSEARCH_VERIFY_TLS: bool = False
+
     @property
     def database_url(self) -> str:
         return (
