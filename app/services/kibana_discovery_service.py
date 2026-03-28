@@ -35,4 +35,8 @@ def discover_kibana(db: Session) -> dict:
         "overall_status": ((status.get("status") or {}).get("overall") or {}).get("level"),
         "data_views_total": len(simplified_views),
         "data_views": simplified_views,
+        "limitations": [
+            "Esta instância do Kibana permite inventário e status, mas não expõe um caminho utilizável para consultas de métricas do Elasticsearch pela aplicação.",
+            "Sem acesso ao Elasticsearch ou a um proxy equivalente, métricas de capacity como CPU, memória, disco e APM não podem ser calculadas por este endpoint."
+        ]
     }

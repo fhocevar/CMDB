@@ -175,6 +175,49 @@ def _extract_cpu_metrics(monitor_data: dict) -> dict:
     }
 
 
+def _agent_status(
+    offline: bool,
+    temp_offline: bool,
+    usage_percent: float,
+    cpu_percent: float,
+    memory_percent: float,
+    disk_percent: float,
+) -> str:
+    if offline or temp_offline:
+        return "critical"
+    if usage_percent >= 90 or cpu_percent >= 90 or memory_percent >= 92 or disk_percent >= 92:
+        return "critical"
+    if usage_percent >= 80 or cpu_percent >= 80 or memory_percent >= 85 or disk_percent >= 85:
+        return "warning"
+    return "ok"
+
+
+def _overall_status(
+    agents_offline: int,
+    queue_stuck: int,
+    queue_blocked: int,
+    queue_oldest_wait_sec: float,
+    executor_usage_percent: float,
+    agents_high_cpu: int,
+    agents_high_memory: int,
+    agents_low_disk: int,
+) -> str:
+    if agents_offline > 0 or queue_stuck > 0 or executor_usage_percent >= 90:
+        return "critical"
+
+    if (
+        queue_blocked > 0
+        or queue_oldest_wait_sec >= 60
+        or executor_usage_percent >= 80
+        or agents_high_cpu > 0
+        or agents_high_memory > 0
+        or agents_low_disk > 0
+    ):
+        return "warning"
+
+    return "ok"
+
+
 def collect_from_jenkins(db: Session) -> dict:
     try:
         client = JenkinsClient()
@@ -201,6 +244,7 @@ def collect_from_jenkins(db: Session) -> dict:
     saturation_agents_total = 0
 
     collected_at = datetime.utcnow()
+    top_agents = []
 
     for computer in computers:
         name = computer.get("displayName")
@@ -214,7 +258,13 @@ def collect_from_jenkins(db: Session) -> dict:
 
         num_executors = int(computer.get("numExecutors") or 0)
         busy_executors = int(computer.get("busyExecutors") or 0)
-        idle_executors = int(computer.get("idleExecutors") or 0)
+
+        idle_executors_raw = computer.get("idleExecutors")
+        if idle_executors_raw is None:
+            idle_executors = max(num_executors - busy_executors, 0)
+        else:
+            idle_executors = int(idle_executors_raw or 0)
+
         offline = bool(computer.get("offline"))
         temp_offline = bool(computer.get("temporarilyOffline"))
 
@@ -242,6 +292,32 @@ def collect_from_jenkins(db: Session) -> dict:
         executors_total += num_executors
         executors_busy += busy_executors
         executors_idle += idle_executors
+
+        agent_status = _agent_status(
+            offline=offline,
+            temp_offline=temp_offline,
+            usage_percent=usage_percent,
+            cpu_percent=cpu["cpu_load_pct"],
+            memory_percent=memory["memory_used_pct"],
+            disk_percent=disk["disk_used_pct"],
+        )
+
+        top_agents.append(
+            {
+                "name": name,
+                "busy_executors": busy_executors,
+                "total_executors": num_executors,
+                "idle_executors": idle_executors,
+                "executor_usage_percent": usage_percent,
+                "cpu_load_percent": cpu["cpu_load_pct"],
+                "memory_used_percent": memory["memory_used_pct"],
+                "disk_used_percent": disk["disk_used_pct"],
+                "offline": offline,
+                "temporarily_offline": temp_offline,
+                "status": agent_status,
+                "monitor_keys": list((monitor_data or {}).keys()),
+            }
+        )
 
         asset, _ = upsert_asset(
             db,
@@ -325,6 +401,18 @@ def collect_from_jenkins(db: Session) -> dict:
     queue_oldest_wait_sec = round(max(waits), 2) if waits else 0.0
     queue_pending_duration_avg_sec = round(sum(waits) / len(waits), 2) if waits else 0.0
 
+    executor_usage_percent = _safe_percent(executors_busy, executors_total)
+    overall_status = _overall_status(
+        agents_offline=agents_offline,
+        queue_stuck=queue_stuck,
+        queue_blocked=queue_blocked,
+        queue_oldest_wait_sec=queue_oldest_wait_sec,
+        executor_usage_percent=executor_usage_percent,
+        agents_high_cpu=agents_high_cpu,
+        agents_high_memory=agents_high_memory,
+        agents_low_disk=agents_low_disk,
+    )
+
     summary_asset, _ = upsert_asset(
         db,
         AssetCreate(
@@ -350,6 +438,7 @@ def collect_from_jenkins(db: Session) -> dict:
                     "queue_buildable": queue_buildable,
                     "queue_blocked": queue_blocked,
                     "queue_stuck": queue_stuck,
+                    "overall_status": overall_status,
                 },
                 ensure_ascii=False,
             ),
@@ -358,7 +447,7 @@ def collect_from_jenkins(db: Session) -> dict:
     )
 
     summary_metrics = [
-        ("jenkins_platform_executor_usage_percent", _safe_percent(executors_busy, executors_total), "percent"),
+        ("jenkins_platform_executor_usage_percent", executor_usage_percent, "percent"),
         ("jenkins_platform_total_executors", executors_total, "count"),
         ("jenkins_platform_busy_executors", executors_busy, "count"),
         ("jenkins_platform_idle_executors", executors_idle, "count"),
@@ -392,10 +481,64 @@ def collect_from_jenkins(db: Session) -> dict:
         update_baseline(db, summary_asset.id, metric_type)
         metrics_written += 1
 
+    top_agents_filtered = [
+        agent for agent in top_agents
+        if agent["name"].lower() not in {"master", "built-in node"}
+    ]
+
+    top_agents = sorted(
+        top_agents_filtered,
+        key=lambda x: (
+            0 if x["status"] == "critical" else 1 if x["status"] == "warning" else 2,
+            -x["executor_usage_percent"],
+            -x["cpu_load_percent"],
+            -x["memory_used_percent"],
+        ),
+    )[:5]
+
+    limitations = []
+
+    if all(not agent.get("monitor_keys") for agent in top_agents):
+        limitations = [
+            "As métricas de CPU, memória e disco vieram vazias.",
+            "O Jenkins não retornou monitorData para os agents.",
+            "A coleta dessas métricas via Jenkins pode exigir permissões adicionais ou configuração de monitoramento nos nodes.",
+            "A coleta pode ser impactada por falta de permissões administrativas.",
+            "Execuções via Jenkins podem usar usuário de serviço (ex: SYSTEM), afetando os dados coletados.",
+            "Coleta remota (WinRM) pode falhar ou retornar dados parciais se não estiver corretamente configurada.",
+            "Restrições de rede, proxy ou firewall podem impedir a coleta completa.",
+            "Serviços do sistema (WMI/Performance Counters) podem não estar disponíveis ou ativos.",
+            "Integrações com APIs dependem de autenticação e permissões válidas.",
+            "Ambientes virtualizados ou instabilidade podem causar variações nas métricas.",
+            "Diferenças no contexto de execução (local, remoto ou container) podem impactar os resultados."
+        ]
+
     return {
         "status": "OK",
         "integration": "JENKINS",
         "agents_collected": total_agents,
-        "queue_total": queue_total,
         "metrics_written": metrics_written,
+        "summary": {
+            "agents_total": total_agents,
+            "agents_online": total_agents - agents_offline,
+            "agents_offline": agents_offline,
+            "agents_temp_offline": agents_temp_offline,
+            "executors_total": executors_total,
+            "executors_busy": executors_busy,
+            "executors_idle": executors_idle,
+            "executor_usage_percent": executor_usage_percent,
+            "queue_total": queue_total,
+            "queue_buildable": queue_buildable,
+            "queue_blocked": queue_blocked,
+            "queue_stuck": queue_stuck,
+            "queue_oldest_wait_sec": queue_oldest_wait_sec,
+            "queue_pending_duration_avg_sec": queue_pending_duration_avg_sec,
+            "agents_high_cpu": agents_high_cpu,
+            "agents_high_memory": agents_high_memory,
+            "agents_low_disk": agents_low_disk,
+            "saturated_agents": saturation_agents_total,
+            "overall_status": overall_status,
+        },
+        "top_agents": top_agents,
+        "limitations": limitations,
     }

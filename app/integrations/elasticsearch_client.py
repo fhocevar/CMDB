@@ -4,44 +4,49 @@ from app.core.config import settings
 
 
 class ElasticsearchClient:
+    """
+    Acesso ao Elasticsearch via proxy do Kibana (/api/console/proxy).
+    """
+
     def __init__(self):
-        self.base_url = (settings.ELASTICSEARCH_URL or "").rstrip("/")
-        self.verify = settings.ELASTICSEARCH_VERIFY_TLS
+        self.base_url = (settings.KIBANA_URL or "").rstrip("/")
+        self.verify = settings.KIBANA_VERIFY_TLS
         self.auth = None
 
         if self.base_url and not (
             self.base_url.startswith("http://") or self.base_url.startswith("https://")
         ):
-            raise ValueError(
-                "ELASTICSEARCH_URL inválida. Informe com http:// ou https://"
-            )
+            raise ValueError("KIBANA_URL inválida. Informe com http:// ou https://")
 
-        if settings.ELASTICSEARCH_USER and settings.ELASTICSEARCH_PASSWORD:
-            self.auth = (settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD)
+        if settings.KIBANA_USER and settings.KIBANA_PASSWORD:
+            self.auth = (settings.KIBANA_USER, settings.KIBANA_PASSWORD)
 
-    def _post(self, path: str, body: dict) -> dict:
-        url = f"{self.base_url}{path}"
+    def _proxy(self, method: str, es_path: str, body: dict | None = None) -> dict:
+        url = f"{self.base_url}/api/console/proxy"
+        params = {
+            "path": es_path,
+            "method": method.upper(),
+        }
 
         with httpx.Client(
             auth=self.auth,
             verify=self.verify,
-            timeout=60.0,
+            timeout=90.0,
+            headers={"kbn-xsrf": "true"},
         ) as client:
-            response = client.post(url, json=body)
-            response.raise_for_status()
+            response = client.post(url, params=params, json=body or {})
+
+            if response.status_code >= 400:
+                detail = response.text.strip()
+                raise RuntimeError(
+                    f"Erro Elasticsearch via Kibana proxy ({response.status_code}): {detail}"
+                )
+
             return response.json()
 
-    def field_caps(self, index_pattern: str) -> dict:
-        return self._post(
-            f"/{index_pattern}/_field_caps?fields=*&ignore_unavailable=true&allow_no_indices=true",
-            {},
-        )
-
     def search(self, index_pattern: str, body: dict) -> dict:
-        return self._post(
-            f"/{index_pattern}/_search?ignore_unavailable=true&allow_no_indices=true",
-            body,
-        )
+        es_path = f"/{index_pattern}/_search?ignore_unavailable=true&allow_no_indices=true"
+        return self._proxy("POST", es_path, body)
 
     def search_metrics_hosts(self) -> dict:
         body = {
@@ -51,14 +56,13 @@ class ElasticsearchClient:
                     "filter": [
                         {"range": {"@timestamp": {"gte": "now-15m"}}},
                         {"exists": {"field": "host.name"}},
-                        {"exists": {"field": "system.cpu.total.norm.pct"}},
                     ]
                 }
             },
             "aggs": {
                 "by_host": {
                     "terms": {
-                        "field": "host.name.keyword",
+                        "field": "host.name",
                         "size": 100
                     },
                     "aggs": {
@@ -69,7 +73,7 @@ class ElasticsearchClient:
                 }
             }
         }
-        return self._post("/metrics-*/_search", body)
+        return self.search("metrics-*", body)
 
     def search_metrics_kubernetes_pods(self) -> dict:
         body = {
@@ -85,19 +89,19 @@ class ElasticsearchClient:
             "aggs": {
                 "by_pod": {
                     "terms": {
-                        "field": "kubernetes.pod.name.keyword",
+                        "field": "kubernetes.pod.name",
                         "size": 100
                     },
                     "aggs": {
                         "cpu_avg": {"avg": {"field": "kubernetes.pod.cpu.usage.node.pct"}},
                         "namespace": {
-                            "terms": {"field": "kubernetes.namespace.keyword", "size": 1}
+                            "terms": {"field": "kubernetes.namespace", "size": 1}
                         }
                     }
                 }
             }
         }
-        return self._post("/metrics-*/_search", body)
+        return self.search("metrics-*", body)
 
     def search_metrics_docker(self) -> dict:
         body = {
@@ -113,7 +117,7 @@ class ElasticsearchClient:
             "aggs": {
                 "by_container": {
                     "terms": {
-                        "field": "container.name.keyword",
+                        "field": "container.name",
                         "size": 100
                     },
                     "aggs": {
@@ -122,4 +126,4 @@ class ElasticsearchClient:
                 }
             }
         }
-        return self._post("/metrics-*/_search", body)
+        return self.search("metrics-*", body)

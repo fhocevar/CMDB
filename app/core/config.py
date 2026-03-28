@@ -68,11 +68,27 @@ class Settings(BaseSettings):
     JENKINS_PASSWORD: str = ""
     JENKINS_VERIFY_TLS: bool = False
 
+    KIBANA_URL: str = ""
+    KIBANA_USER: str = ""
+    KIBANA_PASSWORD: str = ""
+    KIBANA_VERIFY_TLS: bool = False
+
     ELASTICSEARCH_ENABLED: bool = False
     ELASTICSEARCH_URL: str = ""
     ELASTICSEARCH_USER: str = ""
     ELASTICSEARCH_PASSWORD: str = ""
     ELASTICSEARCH_VERIFY_TLS: bool = False
+
+    WINRM_ENABLED: bool = False
+    WINRM_USERNAME: str = ""
+    WINRM_PASSWORD: str = ""
+    WINRM_TRANSPORT: str = "ntlm"
+    WINRM_PORT: int = 5985
+    WINRM_USE_SSL: bool = False
+    WINRM_VERIFY_TLS: bool = False
+    WINRM_OPERATION_TIMEOUT_SEC: int = 30
+    WINRM_READ_TIMEOUT_SEC: int = 45
+    WINRM_HOSTS: str = ""
 
     @property
     def database_url(self) -> str:

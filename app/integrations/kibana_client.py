@@ -5,15 +5,15 @@ from app.core.config import settings
 
 class KibanaClient:
     def __init__(self):
-        self.base_url = (settings.ELASTICSEARCH_URL or "").rstrip("/")
-        self.verify = settings.ELASTICSEARCH_VERIFY_TLS
+        self.base_url = (settings.KIBANA_URL or "").rstrip("/")
+        self.verify = settings.KIBANA_VERIFY_TLS
         self.auth = None
 
         if not self.base_url.startswith(("http://", "https://")):
-            raise ValueError("ELASTICSEARCH_URL inválida. Informe com http:// ou https://")
+            raise ValueError("KIBANA_URL inválida. Informe com http:// ou https://")
 
-        if settings.ELASTICSEARCH_USER and settings.ELASTICSEARCH_PASSWORD:
-            self.auth = (settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD)
+        if settings.KIBANA_USER and settings.KIBANA_PASSWORD:
+            self.auth = (settings.KIBANA_USER, settings.KIBANA_PASSWORD)
 
     def _get(self, path: str) -> dict:
         url = f"{self.base_url}{path}"

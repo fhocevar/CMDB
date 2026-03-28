@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from app.core.config import settings
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -12,7 +13,7 @@ from app.services.jenkins_capacity_service import collect_from_jenkins
 from app.services.elasticsearch_capacity_service import collect_from_elasticsearch
 from app.services.kibana_discovery_service import discover_kibana
 from app.services.kibana_capacity_service import collect_from_kibana
-
+from app.services.winrm_capacity_service import collect_from_winrm
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
@@ -63,3 +64,9 @@ def run_kibana_discovery(db: Session = Depends(get_db), user=Depends(get_current
 @router.post("/kibana/run")
 def run_kibana(db: Session = Depends(get_db), user=Depends(get_current_user)):
     return collect_from_kibana(db)
+
+
+@router.post("/winrm/run")
+def run_winrm(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    hosts = [h.strip() for h in settings.WINRM_HOSTS.split(",") if h.strip()]
+    return collect_from_winrm(db, hosts)
