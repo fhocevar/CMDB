@@ -159,13 +159,18 @@ def _extract_memory_metrics(monitor_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_disk_metrics(monitor_data: dict[str, Any]) -> dict[str, Any]:
+    """
+    No Jenkins, DiskSpaceMonitor/TemporarySpaceMonitor retornam espaço LIVRE.
+    O campo 'size' representa free/usable space do path monitorado.
+    Não dá para calcular percentual sem o total do volume.
+    """
     _, disk_entry = _find_monitor_entry(monitor_data, ["disk", "monitor"])
+    _, temp_entry = _find_monitor_entry(monitor_data, ["temporary", "space", "monitor"])
 
-    if disk_entry is None:
-        _, temp_entry = _find_monitor_entry(monitor_data, ["temporary", "space", "monitor"])
-        disk_entry = temp_entry
+    chosen_entry = disk_entry if disk_entry is not None else temp_entry
+    chosen_source = "disk" if disk_entry is not None else ("temporary" if temp_entry is not None else None)
 
-    if disk_entry is None:
+    if chosen_entry is None:
         return {
             "disk_used_percent": 0.0,
             "disk_total_gb": 0.0,
@@ -173,48 +178,40 @@ def _extract_disk_metrics(monitor_data: dict[str, Any]) -> dict[str, Any]:
             "disk_monitor_found": False,
             "disk_raw_type": None,
             "disk_has_real_data": False,
+            "disk_path": None,
+            "disk_source": None,
         }
 
-    total_size = _pick_first_numeric_by_name(
-        disk_entry,
-        [
-            "totalsize",
-            "totalspace",
-            "totalbytes",
-            "capacity",
-            "size",
-            "total",
-        ],
-    )
-
     free_size = _pick_first_numeric_by_name(
-        disk_entry,
+        chosen_entry,
         [
-            "availablesize",
             "freesize",
+            "usableSpace",
             "usablespace",
-            "freespace",
             "freebytes",
             "availablebytes",
+            "availablesize",
+            "size",
             "free",
             "available",
         ],
     )
 
-    used_percent = 0.0
-    has_real_data = False
+    disk_path = None
+    if isinstance(chosen_entry, dict):
+        disk_path = chosen_entry.get("path")
 
-    if total_size is not None and free_size is not None and total_size > 0:
-        used_percent = round(((total_size - free_size) / total_size) * 100, 2)
-        has_real_data = True
+    has_real_data = free_size is not None
 
     return {
-        "disk_used_percent": used_percent,
-        "disk_total_gb": _bytes_to_gb(total_size),
+        "disk_used_percent": 0.0,
+        "disk_total_gb": 0.0,
         "disk_free_gb": _bytes_to_gb(free_size),
         "disk_monitor_found": True,
-        "disk_raw_type": type(disk_entry).__name__,
+        "disk_raw_type": type(chosen_entry).__name__,
         "disk_has_real_data": has_real_data,
+        "disk_path": disk_path,
+        "disk_source": chosen_source,
     }
 
 
@@ -416,30 +413,38 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
         executors_busy += busy_executors
         executors_idle += idle_executors
 
-        if cpu_load_percent >= 85:
+        if cpu_metrics["cpu_has_real_data"] and cpu_load_percent >= 85:
             agents_high_cpu += 1
-        if memory_used_percent >= 90:
+        if memory_metrics["memory_has_real_data"] and memory_used_percent >= 90:
             agents_high_memory += 1
-        if disk_used_percent >= 90:
+
+        # Sem percentual real de disco ainda; usa alerta simples por GB livre
+        if disk_metrics["disk_has_real_data"] and disk_metrics["disk_free_gb"] <= 10:
             agents_low_disk += 1
 
         agent_status = "ok"
         if offline or temp_offline:
             agent_status = "warning"
-        if (
-            executor_usage_percent >= 95
-            or cpu_load_percent >= 95
-            or memory_used_percent >= 95
-            or disk_used_percent >= 95
-        ):
+
+        if executor_usage_percent >= 95:
             agent_status = "critical"
             saturation_agents_total += 1
-        elif (
-            executor_usage_percent >= 85
-            or cpu_load_percent >= 85
-            or memory_used_percent >= 90
-            or disk_used_percent >= 90
-        ):
+        elif executor_usage_percent >= 85 and agent_status != "critical":
+            agent_status = "warning"
+
+        if cpu_metrics["cpu_has_real_data"] and cpu_load_percent >= 95:
+            agent_status = "critical"
+        elif cpu_metrics["cpu_has_real_data"] and cpu_load_percent >= 85 and agent_status != "critical":
+            agent_status = "warning"
+
+        if memory_metrics["memory_has_real_data"] and memory_used_percent >= 95:
+            agent_status = "critical"
+        elif memory_metrics["memory_has_real_data"] and memory_used_percent >= 90 and agent_status != "critical":
+            agent_status = "warning"
+
+        if disk_metrics["disk_has_real_data"] and disk_metrics["disk_free_gb"] <= 5:
+            agent_status = "critical"
+        elif disk_metrics["disk_has_real_data"] and disk_metrics["disk_free_gb"] <= 10 and agent_status != "critical":
             agent_status = "warning"
 
         labels_json_payload = {
@@ -451,6 +456,8 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
             "memory_available_gb": memory_metrics["memory_available_gb"],
             "disk_total_gb": disk_metrics["disk_total_gb"],
             "disk_free_gb": disk_metrics["disk_free_gb"],
+            "disk_path": disk_metrics["disk_path"],
+            "disk_source": disk_metrics["disk_source"],
             "memory_monitor_found": memory_metrics["memory_monitor_found"],
             "disk_monitor_found": disk_metrics["disk_monitor_found"],
             "cpu_monitor_found": cpu_metrics["cpu_monitor_found"],
@@ -474,7 +481,7 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
                 operating_system="UNKNOWN",
                 cpu_cores=max(num_executors, 1),
                 memory_gb=max(memory_metrics["memory_total_gb"], 0),
-                disk_gb=max(disk_metrics["disk_total_gb"], 0),
+                disk_gb=0,
                 network_mbps=0,
                 cluster_name=None,
                 namespace=None,
@@ -497,8 +504,10 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
             ("jenkins_disk_used_percent", disk_used_percent, "percent"),
             ("jenkins_memory_total_gb", memory_metrics["memory_total_gb"], "gb"),
             ("jenkins_memory_available_gb", memory_metrics["memory_available_gb"], "gb"),
-            ("jenkins_disk_total_gb", disk_metrics["disk_total_gb"], "gb"),
             ("jenkins_disk_free_gb", disk_metrics["disk_free_gb"], "gb"),
+            ("jenkins_cpu_has_real_data", 100.0 if cpu_metrics["cpu_has_real_data"] else 0.0, "state"),
+            ("jenkins_memory_has_real_data", 100.0 if memory_metrics["memory_has_real_data"] else 0.0, "state"),
+            ("jenkins_disk_has_real_data", 100.0 if disk_metrics["disk_has_real_data"] else 0.0, "state"),
             ("jenkins_monitor_keys_count", len(monitor_keys), "count"),
             (
                 "jenkins_agent_status_state",
@@ -538,6 +547,8 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
                 "memory_available_gb": memory_metrics["memory_available_gb"],
                 "disk_total_gb": disk_metrics["disk_total_gb"],
                 "disk_free_gb": disk_metrics["disk_free_gb"],
+                "disk_path": disk_metrics["disk_path"],
+                "disk_source": disk_metrics["disk_source"],
                 "cpu_has_real_data": cpu_metrics["cpu_has_real_data"],
                 "memory_has_real_data": memory_metrics["memory_has_real_data"],
                 "disk_has_real_data": disk_metrics["disk_has_real_data"],
@@ -564,25 +575,26 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
         key=lambda x: (
             x["status"] != "critical",
             x["status"] != "warning",
-            -(x["executor_usage_percent"] or 0),
-            -(x["cpu_load_percent"] or 0),
+            -(x["memory_used_percent"] or 0),
+            x["disk_free_gb"] if x["disk_free_gb"] > 0 else 999999,
             x["name"],
         ),
     )[:10]
 
-    has_real_capacity_data = any(
-        agent.get("cpu_has_real_data")
-        or agent.get("memory_has_real_data")
-        or agent.get("disk_has_real_data")
-        for agent in top_agents
-    )
+    has_real_cpu_data = any(agent.get("cpu_has_real_data") for agent in top_agents)
+    has_real_memory_data = any(agent.get("memory_has_real_data") for agent in top_agents)
+    has_real_disk_data = any(agent.get("disk_has_real_data") for agent in top_agents)
+    has_real_capacity_data = has_real_cpu_data or has_real_memory_data or has_real_disk_data
 
     limitations = []
-    if not has_real_capacity_data:
-        limitations = [
-            "O Jenkins respondeu, mas o monitorData não trouxe números reais de CPU, memória e disco.",
-            "Neste cenário, o serviço só consegue capacity operacional por executores e estado dos nodes.",
-        ]
+    if not has_real_cpu_data:
+        limitations.append("CPU real não foi disponibilizada pelo monitorData do Jenkins.")
+    if has_real_disk_data:
+        limitations.append("Disco real disponível no Jenkins representa espaço livre do path monitorado; percentual de uso exige o tamanho total do volume.")
+    else:
+        limitations.append("Disco real não foi disponibilizado pelo monitorData do Jenkins.")
+    if not has_real_memory_data:
+        limitations.append("Memória real não foi disponibilizada pelo monitorData do Jenkins.")
 
     return {
         "status": "OK",
@@ -610,6 +622,9 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
             "saturated_agents": saturation_agents_total,
             "overall_status": overall_status,
             "has_real_capacity_data": has_real_capacity_data,
+            "has_real_cpu_data": has_real_cpu_data,
+            "has_real_memory_data": has_real_memory_data,
+            "has_real_disk_data": has_real_disk_data,
         },
         "top_agents": top_agents,
         "limitations": limitations,
