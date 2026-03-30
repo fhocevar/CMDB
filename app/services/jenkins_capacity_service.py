@@ -251,11 +251,14 @@ def _extract_cpu_metrics(
                 cpu_load_percent = round(candidate, 2)
             has_real_data = True
 
+    cpu_operational_percent = _safe_percent(busy_executors, total_executors)
+
     if not has_real_data:
-        cpu_load_percent = _safe_percent(busy_executors, total_executors)
+        cpu_load_percent = 0.0
 
     return {
         "cpu_load_percent": cpu_load_percent,
+        "cpu_operational_percent": cpu_operational_percent,
         "cpu_monitor_found": monitor_found,
         "cpu_raw_type": raw_type,
         "cpu_has_real_data": has_real_data,
@@ -398,6 +401,7 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
         cpu_metrics = _extract_cpu_metrics(monitor_data, num_executors, busy_executors)
 
         cpu_load_percent = cpu_metrics["cpu_load_percent"]
+        cpu_operational_percent = cpu_metrics["cpu_operational_percent"]
         memory_used_percent = memory_metrics["memory_used_percent"]
         disk_used_percent = disk_metrics["disk_used_percent"]
 
@@ -415,10 +419,12 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
 
         if cpu_metrics["cpu_has_real_data"] and cpu_load_percent >= 85:
             agents_high_cpu += 1
+        elif not cpu_metrics["cpu_has_real_data"] and cpu_operational_percent >= 85:
+            agents_high_cpu += 1
+
         if memory_metrics["memory_has_real_data"] and memory_used_percent >= 90:
             agents_high_memory += 1
 
-        # Sem percentual real de disco ainda; usa alerta simples por GB livre
         if disk_metrics["disk_has_real_data"] and disk_metrics["disk_free_gb"] <= 10:
             agents_low_disk += 1
 
@@ -435,6 +441,10 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
         if cpu_metrics["cpu_has_real_data"] and cpu_load_percent >= 95:
             agent_status = "critical"
         elif cpu_metrics["cpu_has_real_data"] and cpu_load_percent >= 85 and agent_status != "critical":
+            agent_status = "warning"
+        elif not cpu_metrics["cpu_has_real_data"] and cpu_operational_percent >= 95:
+            agent_status = "critical"
+        elif not cpu_metrics["cpu_has_real_data"] and cpu_operational_percent >= 85 and agent_status != "critical":
             agent_status = "warning"
 
         if memory_metrics["memory_has_real_data"] and memory_used_percent >= 95:
@@ -467,6 +477,7 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
             "memory_has_real_data": memory_metrics["memory_has_real_data"],
             "disk_has_real_data": disk_metrics["disk_has_real_data"],
             "cpu_has_real_data": cpu_metrics["cpu_has_real_data"],
+            "cpu_operational_percent": cpu_operational_percent,
         }
 
         asset, _ = upsert_asset(
@@ -500,6 +511,7 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
             ("jenkins_offline_state", 100.0 if offline else 0.0, "state"),
             ("jenkins_temp_offline_state", 100.0 if temp_offline else 0.0, "state"),
             ("jenkins_cpu_load_percent", cpu_load_percent, "percent"),
+            ("jenkins_cpu_operational_percent", cpu_operational_percent, "percent"),
             ("jenkins_memory_used_percent", memory_used_percent, "percent"),
             ("jenkins_disk_used_percent", disk_used_percent, "percent"),
             ("jenkins_memory_total_gb", memory_metrics["memory_total_gb"], "gb"),
@@ -541,6 +553,7 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
                 "idle_executors": idle_executors,
                 "executor_usage_percent": executor_usage_percent,
                 "cpu_load_percent": cpu_load_percent,
+                "cpu_operational_percent": cpu_operational_percent,
                 "memory_used_percent": memory_used_percent,
                 "disk_used_percent": disk_used_percent,
                 "memory_total_gb": memory_metrics["memory_total_gb"],
@@ -588,7 +601,7 @@ def collect_from_jenkins(db: Session) -> dict[str, Any]:
 
     limitations = []
     if not has_real_cpu_data:
-        limitations.append("CPU real não foi disponibilizada pelo monitorData do Jenkins.")
+        limitations.append("CPU real não foi disponibilizada pelo monitorData do Jenkins; CPU operacional usa ocupação dos executores.")
     if has_real_disk_data:
         limitations.append("Disco real disponível no Jenkins representa espaço livre do path monitorado; percentual de uso exige o tamanho total do volume.")
     else:

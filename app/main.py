@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from sqlalchemy.orm import Session
-
+from app.api.routes import jenkins
 from app.api.routes.agents import router as agents_router
 from app.api.routes.assets import router as assets_router
 from app.api.routes.auth import router as auth_router
@@ -99,7 +99,7 @@ def seed_admin_and_thresholds():
 
 seed_admin_and_thresholds()
 start_scheduler()
-
+app.include_router(jenkins.router)
 app.include_router(auth_router)
 app.include_router(assets_router)
 app.include_router(metrics_router)

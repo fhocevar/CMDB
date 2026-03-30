@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-
+from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.services.application_service import ApplicationService
+from app.services.jenkins_snapshot_service import build_jenkins_capacity_snapshot
 
 router = APIRouter(prefix="/applications", tags=["Applications"])
 
@@ -42,3 +43,11 @@ def get_capacity_dashboard_html(db: Session = Depends(get_db)):
 def get_capacity(app_name: str, db: Session = Depends(get_db)):
     service = ApplicationService(db)
     return service.get_application_capacity(app_name)
+
+
+@router.get("/capacity/jenkins/snapshot")
+def get_jenkins_capacity_snapshot(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    return build_jenkins_capacity_snapshot(db)
