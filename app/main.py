@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
 from app.core.scheduler import start_scheduler
 from app.core.security import hash_password
-
+from app.api.routes import jenkins_jobs
 # IMPORTS DOS MODELS QUE PRECISAM ESTAR REGISTRADOS NO METADATA
 from app.models.app_capacity_snapshot import AppCapacitySnapshot
 from app.models.threshold_policy import ThresholdPolicy
@@ -100,6 +100,7 @@ def seed_admin_and_thresholds():
 seed_admin_and_thresholds()
 start_scheduler()
 app.include_router(jenkins.router)
+app.include_router(jenkins_jobs.router)
 app.include_router(auth_router)
 app.include_router(assets_router)
 app.include_router(metrics_router)
