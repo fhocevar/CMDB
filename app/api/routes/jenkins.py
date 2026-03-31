@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.services.jenkins_capacity_service import collect_from_jenkins
 from app.services.jenkins_dashboard_service import JenkinsDashboardService
 
 router = APIRouter(prefix="/jenkins", tags=["Jenkins"])
@@ -15,7 +14,8 @@ def collect_jenkins_capacity(
     db: Session = Depends(get_db),
     #user=Depends(get_current_user),
 ):
-    return collect_from_jenkins(db)
+    service = JenkinsDashboardService(db)
+    return service.collect_and_persist_snapshot()
 
 
 @router.get("/capacity/dashboard")

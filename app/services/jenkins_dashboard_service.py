@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models.jenkins_capacity_snapshot import JenkinsCapacitySnapshot
 from app.services.jenkins_capacity_service import collect_from_jenkins
 
 
@@ -66,6 +66,77 @@ class JenkinsDashboardService:
             "summary": summary,
             "agents": top_agents,
             "limitations": limitations,
+        }
+
+    def collect_and_persist_snapshot(self) -> dict[str, Any]:
+        result = collect_from_jenkins(self.db)
+
+        if result.get("status") != "OK":
+            return {
+                "status": "ERROR",
+                "provider": "JENKINS",
+                "message": result.get("message", "Erro ao coletar dados do Jenkins."),
+            }
+
+        summary = result.get("summary", {})
+        top_agents = result.get("top_agents", [])
+        limitations = result.get("limitations", [])
+
+        avg_cpu_operational_percent = self._avg(
+            [item.get("cpu_operational_percent", 0) for item in top_agents]
+        )
+        avg_memory_used_percent = self._avg(
+            [item.get("memory_used_percent", 0) for item in top_agents if item.get("memory_has_real_data")]
+        )
+        min_disk_free_gb = self._min(
+            [item.get("disk_free_gb", 0) for item in top_agents if item.get("disk_has_real_data")]
+        )
+
+        snapshot = JenkinsCapacitySnapshot(
+            provider="JENKINS",
+            snapshot_type="jenkins_capacity",
+            overall_status=summary.get("overall_status"),
+
+            agents_total=summary.get("agents_total"),
+            agents_online=summary.get("agents_online"),
+            agents_offline=summary.get("agents_offline"),
+            agents_temp_offline=summary.get("agents_temp_offline"),
+
+            executors_total=summary.get("executors_total"),
+            executors_busy=summary.get("executors_busy"),
+            executors_idle=summary.get("executors_idle"),
+
+            queue_total=summary.get("queue_total"),
+            queue_buildable=summary.get("queue_buildable"),
+            queue_blocked=summary.get("queue_blocked"),
+            queue_stuck=summary.get("queue_stuck"),
+
+            executor_usage_percent=summary.get("executor_usage_percent"),
+
+            avg_cpu_operational_percent=str(avg_cpu_operational_percent),
+            avg_memory_used_percent=str(avg_memory_used_percent),
+            min_disk_free_gb=str(min_disk_free_gb),
+
+            has_real_cpu_data=str(summary.get("has_real_cpu_data", False)),
+            has_real_memory_data=str(summary.get("has_real_memory_data", False)),
+            has_real_disk_data=str(summary.get("has_real_disk_data", False)),
+
+            summary_json=summary,
+            agents_json=top_agents,
+            limitations_json=limitations,
+        )
+
+        self.db.add(snapshot)
+        self.db.commit()
+        self.db.refresh(snapshot)
+
+        return {
+            "status": "OK",
+            "provider": "JENKINS",
+            "message": "Snapshot do Jenkins persistido com sucesso.",
+            "snapshot_id": snapshot.id,
+            "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "summary": summary,
         }
 
     def _avg(self, values: list[float]) -> float:
@@ -571,37 +642,71 @@ class JenkinsDashboardService:
 
     async function loadDashboard() {
       const response = await fetch('/jenkins/capacity/dashboard');
+
+      if (!response.ok) {
+        let errorText = `HTTP ${response.status}`;
+        try {
+          const errorJson = await response.json();
+          errorText = errorJson.detail || errorJson.message || errorText;
+        } catch (_) {}
+        throw new Error(errorText);
+      }
+
       return await response.json();
     }
 
     async function collectNow() {
-      await fetch('/jenkins/capacity/collect', { method: 'POST' });
+      const response = await fetch('/jenkins/capacity/collect', { method: 'POST' });
+
+      if (!response.ok) {
+        let errorText = `HTTP ${response.status}`;
+        try {
+          const errorJson = await response.json();
+          errorText = errorJson.detail || errorJson.message || errorText;
+        } catch (_) {}
+        alert(`Falha na coleta: ${errorText}`);
+        return;
+      }
+
       await loadAll();
       alert('Coleta concluída.');
     }
 
     async function loadAll() {
-      const dashboard = await loadDashboard();
+      try {
+        const dashboard = await loadDashboard();
 
-      if (dashboard.status !== "OK") {
+        if (dashboard.status !== "OK") {
+          document.getElementById("cards").innerHTML = `
+            <div class="panel">
+              <div class="label">Erro</div>
+              <div class="value" style="font-size:18px;">${dashboard.message || "Falha ao carregar dashboard do Jenkins."}</div>
+            </div>
+          `;
+          document.getElementById("indicators").innerHTML = "";
+          document.getElementById("alerts").innerHTML = "";
+          document.getElementById("agentsTable").innerHTML = "";
+          document.getElementById("limitations").innerHTML = "";
+          return;
+        }
+
+        renderCards(dashboard.cards || {});
+        renderIndicators(dashboard.indicators || {}, dashboard.summary || {});
+        renderAlerts(dashboard.alerts || []);
+        renderAgents(dashboard.agents || []);
+        renderLimitations(dashboard.limitations || []);
+      } catch (error) {
         document.getElementById("cards").innerHTML = `
           <div class="panel">
             <div class="label">Erro</div>
-            <div class="value" style="font-size:18px;">${dashboard.message || "Falha ao carregar dashboard do Jenkins."}</div>
+            <div class="value" style="font-size:18px;">${error.message || "Falha ao carregar dashboard do Jenkins."}</div>
           </div>
         `;
         document.getElementById("indicators").innerHTML = "";
         document.getElementById("alerts").innerHTML = "";
         document.getElementById("agentsTable").innerHTML = "";
         document.getElementById("limitations").innerHTML = "";
-        return;
       }
-
-      renderCards(dashboard.cards || {});
-      renderIndicators(dashboard.indicators || {}, dashboard.summary || {});
-      renderAlerts(dashboard.alerts || []);
-      renderAgents(dashboard.agents || []);
-      renderLimitations(dashboard.limitations || []);
     }
 
     loadAll();
