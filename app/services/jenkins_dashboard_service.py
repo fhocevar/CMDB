@@ -13,6 +13,18 @@ class JenkinsDashboardService:
         self.db = db
 
     def get_dashboard_data(self) -> dict[str, Any]:
+        latest_snapshot = (
+            self.db.query(JenkinsCapacitySnapshot)
+            .order_by(JenkinsCapacitySnapshot.created_at.desc())
+            .first()
+        )
+
+        if latest_snapshot:
+            return self._build_dashboard_from_snapshot(latest_snapshot)
+
+        return self._build_dashboard_from_live_data()
+
+    def collect_and_persist_snapshot(self) -> dict[str, Any]:
         result = collect_from_jenkins(self.db)
 
         if result.get("status") != "OK":
@@ -30,10 +42,227 @@ class JenkinsDashboardService:
             [item.get("cpu_operational_percent", 0) for item in top_agents]
         )
         avg_memory_used_percent = self._avg(
-            [item.get("memory_used_percent", 0) for item in top_agents if item.get("memory_has_real_data")]
+            [
+                item.get("memory_used_percent", 0)
+                for item in top_agents
+                if item.get("memory_has_real_data")
+            ]
         )
         min_disk_free_gb = self._min(
-            [item.get("disk_free_gb", 0) for item in top_agents if item.get("disk_has_real_data")]
+            [
+                item.get("disk_free_gb", 0)
+                for item in top_agents
+                if item.get("disk_has_real_data")
+            ]
+        )
+
+        snapshot = JenkinsCapacitySnapshot(
+            provider="JENKINS",
+            snapshot_type="jenkins_capacity",
+            overall_status=summary.get("overall_status"),
+            agents_total=summary.get("agents_total"),
+            agents_online=summary.get("agents_online"),
+            agents_offline=summary.get("agents_offline"),
+            agents_temp_offline=summary.get("agents_temp_offline"),
+            executors_total=summary.get("executors_total"),
+            executors_busy=summary.get("executors_busy"),
+            executors_idle=summary.get("executors_idle"),
+            queue_total=summary.get("queue_total"),
+            queue_buildable=summary.get("queue_buildable"),
+            queue_blocked=summary.get("queue_blocked"),
+            queue_stuck=summary.get("queue_stuck"),
+            executor_usage_percent=summary.get("executor_usage_percent"),
+            avg_cpu_operational_percent=str(avg_cpu_operational_percent),
+            avg_memory_used_percent=str(avg_memory_used_percent),
+            min_disk_free_gb=str(min_disk_free_gb),
+            has_real_cpu_data=str(summary.get("has_real_cpu_data", False)),
+            has_real_memory_data=str(summary.get("has_real_memory_data", False)),
+            has_real_disk_data=str(summary.get("has_real_disk_data", False)),
+            summary_json=summary,
+            agents_json=top_agents,
+            limitations_json=limitations,
+        )
+
+        self.db.add(snapshot)
+        self.db.commit()
+        self.db.refresh(snapshot)
+
+        return {
+            "status": "OK",
+            "provider": "JENKINS",
+            "message": "Snapshot do Jenkins persistido com sucesso.",
+            "snapshot_id": snapshot.id,
+            "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "summary": summary,
+        }
+
+    def get_history(self, limit: int = 30) -> dict[str, Any]:
+        rows = (
+            self.db.query(JenkinsCapacitySnapshot)
+            .order_by(JenkinsCapacitySnapshot.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+        rows = list(reversed(rows))
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            items.append(
+                {
+                    "id": row.id,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "overall_status": row.overall_status,
+                    "agents_total": row.agents_total or 0,
+                    "agents_online": row.agents_online or 0,
+                    "agents_offline": row.agents_offline or 0,
+                    "agents_temp_offline": row.agents_temp_offline or 0,
+                    "executors_total": row.executors_total or 0,
+                    "executors_busy": row.executors_busy or 0,
+                    "executors_idle": row.executors_idle or 0,
+                    "queue_total": row.queue_total or 0,
+                    "queue_buildable": row.queue_buildable or 0,
+                    "queue_blocked": row.queue_blocked or 0,
+                    "queue_stuck": row.queue_stuck or 0,
+                    "executor_usage_percent": self._to_float(row.executor_usage_percent),
+                    "avg_cpu_operational_percent": self._to_float(
+                        row.avg_cpu_operational_percent
+                    ),
+                    "avg_memory_used_percent": self._to_float(
+                        row.avg_memory_used_percent
+                    ),
+                    "min_disk_free_gb": self._to_float(row.min_disk_free_gb),
+                    "has_real_cpu_data": self._to_bool(row.has_real_cpu_data),
+                    "has_real_memory_data": self._to_bool(row.has_real_memory_data),
+                    "has_real_disk_data": self._to_bool(row.has_real_disk_data),
+                }
+            )
+
+        return {
+            "status": "OK",
+            "provider": "JENKINS",
+            "snapshot_type": "jenkins_capacity",
+            "count": len(items),
+            "items": items,
+        }
+
+    def get_forecast(self, steps: int = 6) -> dict[str, Any]:
+        history = self.get_history(limit=20).get("items", [])
+
+        if len(history) < 3:
+            return {
+                "status": "OK",
+                "provider": "JENKINS",
+                "method": "linear_trend",
+                "message": "Histórico insuficiente para forecast. Gere pelo menos 3 snapshots.",
+                "forecast": [],
+            }
+
+        queue_total_series = [self._to_float(item.get("queue_total")) for item in history]
+        executors_busy_series = [
+            self._to_float(item.get("executors_busy")) for item in history
+        ]
+        cpu_avg_series = [
+            self._to_float(item.get("avg_cpu_operational_percent")) for item in history
+        ]
+        memory_avg_series = [
+            self._to_float(item.get("avg_memory_used_percent")) for item in history
+        ]
+        disk_min_series = [self._to_float(item.get("min_disk_free_gb")) for item in history]
+
+        queue_total_forecast = self._linear_forecast(queue_total_series, steps, floor=0)
+        executors_busy_forecast = self._linear_forecast(
+            executors_busy_series, steps, floor=0
+        )
+        cpu_avg_forecast = self._linear_forecast(cpu_avg_series, steps, floor=0, cap=100)
+        memory_avg_forecast = self._linear_forecast(
+            memory_avg_series, steps, floor=0, cap=100
+        )
+        disk_min_forecast = self._linear_forecast(disk_min_series, steps, floor=0)
+
+        items: list[dict[str, Any]] = []
+        for index in range(steps):
+            items.append(
+                {
+                    "step": index + 1,
+                    "queue_total_pred": queue_total_forecast[index],
+                    "executors_busy_pred": executors_busy_forecast[index],
+                    "avg_cpu_operational_percent_pred": cpu_avg_forecast[index],
+                    "avg_memory_used_percent_pred": memory_avg_forecast[index],
+                    "min_disk_free_gb_pred": disk_min_forecast[index],
+                }
+            )
+
+        return {
+            "status": "OK",
+            "provider": "JENKINS",
+            "snapshot_type": "jenkins_capacity",
+            "method": "linear_trend",
+            "based_on_snapshots": len(history),
+            "forecast": items,
+        }
+
+    def _build_dashboard_from_live_data(self) -> dict[str, Any]:
+        result = collect_from_jenkins(self.db)
+
+        if result.get("status") != "OK":
+            return {
+                "status": "ERROR",
+                "provider": "JENKINS",
+                "message": result.get("message", "Erro ao coletar dados do Jenkins."),
+            }
+
+        summary = result.get("summary", {})
+        top_agents = result.get("top_agents", [])
+        limitations = result.get("limitations", [])
+
+        return self._build_dashboard_payload(
+            summary=summary,
+            top_agents=top_agents,
+            limitations=limitations,
+            snapshot_time=None,
+            generated_from="live",
+        )
+
+    def _build_dashboard_from_snapshot(
+        self, snapshot: JenkinsCapacitySnapshot
+    ) -> dict[str, Any]:
+        summary = snapshot.summary_json or {}
+        top_agents = snapshot.agents_json or []
+        limitations = snapshot.limitations_json or []
+
+        return self._build_dashboard_payload(
+            summary=summary,
+            top_agents=top_agents,
+            limitations=limitations,
+            snapshot_time=snapshot.created_at.isoformat() if snapshot.created_at else None,
+            generated_from="snapshot",
+        )
+
+    def _build_dashboard_payload(
+        self,
+        summary: dict[str, Any],
+        top_agents: list[dict[str, Any]],
+        limitations: list[str],
+        snapshot_time: str | None,
+        generated_from: str,
+    ) -> dict[str, Any]:
+        avg_cpu_operational_percent = self._avg(
+            [item.get("cpu_operational_percent", 0) for item in top_agents]
+        )
+        avg_memory_used_percent = self._avg(
+            [
+                item.get("memory_used_percent", 0)
+                for item in top_agents
+                if item.get("memory_has_real_data")
+            ]
+        )
+        min_disk_free_gb = self._min(
+            [
+                item.get("disk_free_gb", 0)
+                for item in top_agents
+                if item.get("disk_has_real_data")
+            ]
         )
 
         cards = {
@@ -60,83 +289,14 @@ class JenkinsDashboardService:
             "status": "OK",
             "provider": "JENKINS",
             "snapshot_type": "jenkins_capacity",
+            "generated_from": generated_from,
+            "snapshot_time": snapshot_time,
             "cards": cards,
             "indicators": indicators,
             "alerts": alerts,
             "summary": summary,
             "agents": top_agents,
             "limitations": limitations,
-        }
-
-    def collect_and_persist_snapshot(self) -> dict[str, Any]:
-        result = collect_from_jenkins(self.db)
-
-        if result.get("status") != "OK":
-            return {
-                "status": "ERROR",
-                "provider": "JENKINS",
-                "message": result.get("message", "Erro ao coletar dados do Jenkins."),
-            }
-
-        summary = result.get("summary", {})
-        top_agents = result.get("top_agents", [])
-        limitations = result.get("limitations", [])
-
-        avg_cpu_operational_percent = self._avg(
-            [item.get("cpu_operational_percent", 0) for item in top_agents]
-        )
-        avg_memory_used_percent = self._avg(
-            [item.get("memory_used_percent", 0) for item in top_agents if item.get("memory_has_real_data")]
-        )
-        min_disk_free_gb = self._min(
-            [item.get("disk_free_gb", 0) for item in top_agents if item.get("disk_has_real_data")]
-        )
-
-        snapshot = JenkinsCapacitySnapshot(
-            provider="JENKINS",
-            snapshot_type="jenkins_capacity",
-            overall_status=summary.get("overall_status"),
-
-            agents_total=summary.get("agents_total"),
-            agents_online=summary.get("agents_online"),
-            agents_offline=summary.get("agents_offline"),
-            agents_temp_offline=summary.get("agents_temp_offline"),
-
-            executors_total=summary.get("executors_total"),
-            executors_busy=summary.get("executors_busy"),
-            executors_idle=summary.get("executors_idle"),
-
-            queue_total=summary.get("queue_total"),
-            queue_buildable=summary.get("queue_buildable"),
-            queue_blocked=summary.get("queue_blocked"),
-            queue_stuck=summary.get("queue_stuck"),
-
-            executor_usage_percent=summary.get("executor_usage_percent"),
-
-            avg_cpu_operational_percent=str(avg_cpu_operational_percent),
-            avg_memory_used_percent=str(avg_memory_used_percent),
-            min_disk_free_gb=str(min_disk_free_gb),
-
-            has_real_cpu_data=str(summary.get("has_real_cpu_data", False)),
-            has_real_memory_data=str(summary.get("has_real_memory_data", False)),
-            has_real_disk_data=str(summary.get("has_real_disk_data", False)),
-
-            summary_json=summary,
-            agents_json=top_agents,
-            limitations_json=limitations,
-        )
-
-        self.db.add(snapshot)
-        self.db.commit()
-        self.db.refresh(snapshot)
-
-        return {
-            "status": "OK",
-            "provider": "JENKINS",
-            "message": "Snapshot do Jenkins persistido com sucesso.",
-            "snapshot_id": snapshot.id,
-            "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
-            "summary": summary,
         }
 
     def _avg(self, values: list[float]) -> float:
@@ -151,7 +311,63 @@ class JenkinsDashboardService:
             return 0.0
         return round(min(valid), 2)
 
-    def _build_alerts(self, summary: dict[str, Any], agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _to_float(self, value: Any) -> float:
+        try:
+            return round(float(value), 2)
+        except Exception:
+            return 0.0
+
+    def _to_bool(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {"true", "1", "sim", "yes"}
+
+    def _linear_forecast(
+        self,
+        values: list[float],
+        steps: int,
+        floor: float | None = None,
+        cap: float | None = None,
+    ) -> list[float]:
+        clean = [float(v or 0) for v in values]
+        n = len(clean)
+
+        if n == 0:
+            return [0.0 for _ in range(steps)]
+
+        if n == 1:
+            base = clean[0]
+            return [round(base, 2) for _ in range(steps)]
+
+        x = list(range(n))
+        x_mean = sum(x) / n
+        y_mean = sum(clean) / n
+
+        numerator = sum((xi - x_mean) * (yi - y_mean) for xi, yi in zip(x, clean))
+        denominator = sum((xi - x_mean) ** 2 for xi in x) or 1
+
+        slope = numerator / denominator
+        intercept = y_mean - slope * x_mean
+
+        result: list[float] = []
+        for i in range(n, n + steps):
+            pred = intercept + slope * i
+
+            if floor is not None:
+                pred = max(pred, floor)
+
+            if cap is not None:
+                pred = min(pred, cap)
+
+            result.append(round(pred, 2))
+
+        return result
+
+    def _build_alerts(
+        self, summary: dict[str, Any], agents: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         alerts: list[dict[str, Any]] = []
 
         if summary.get("queue_blocked", 0) > 0:
@@ -344,6 +560,13 @@ class JenkinsDashboardService:
       margin-bottom: 18px;
     }
 
+    .grid-bottom {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
     h3 {
       margin-top: 0;
       margin-bottom: 14px;
@@ -414,6 +637,10 @@ class JenkinsDashboardService:
       min-width: 1200px;
     }
 
+    .compact-table {
+      min-width: 100%;
+    }
+
     th, td {
       padding: 10px 12px;
       border-bottom: 1px solid var(--border);
@@ -448,18 +675,6 @@ class JenkinsDashboardService:
     .bar.cpu { background: var(--purple); }
     .bar.disk { background: var(--green); }
 
-    .pill {
-      display: inline-block;
-      padding: 3px 8px;
-      border-radius: 999px;
-      background: rgba(50,116,217,0.18);
-      color: #8ab4f8;
-      font-size: 12px;
-      font-weight: 700;
-      margin-right: 6px;
-      margin-bottom: 6px;
-    }
-
     .limitations {
       display: grid;
       gap: 8px;
@@ -472,9 +687,21 @@ class JenkinsDashboardService:
       padding-left: 10px;
     }
 
+    .snapshot-badge {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(50,116,217,0.18);
+      color: #8ab4f8;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
     @media (max-width: 1100px) {
       .grid-main,
-      .grid-panels {
+      .grid-panels,
+      .grid-bottom {
         grid-template-columns: 1fr;
       }
     }
@@ -486,6 +713,7 @@ class JenkinsDashboardService:
       <div>
         <div class="title">Jenkins Capacity Dashboard</div>
         <div class="subtitle">Agents, executors, memória, disco livre e fila do Jenkins</div>
+        <div id="snapshotInfo" class="snapshot-badge">Carregando origem dos dados...</div>
       </div>
       <div class="actions">
         <button onclick="collectNow()">Coletar agora</button>
@@ -532,12 +760,75 @@ class JenkinsDashboardService:
       </div>
     </div>
 
+    <div class="panel">
+      <h3>Limitações técnicas</h3>
+      <div id="limitations" class="limitations"></div>
+    </div>
+
+    <div class="grid-bottom">
       <div class="panel">
-        <h3>Limitações técnicas</h3>
-        <div id="limitations" class="limitations"></div>
+        <h3>Histórico recente</h3>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Agents</th>
+                <th>Executors Busy</th>
+                <th>Fila</th>
+                <th>CPU Média</th>
+                <th>Memória Média</th>
+                <th>Menor Disco</th>
+              </tr>
+            </thead>
+            <tbody id="historyTable"></tbody>
+          </table>
+        </div>
       </div>
 
+      <div class="panel">
+        <h3>Forecast</h3>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead>
+              <tr>
+                <th>Passo</th>
+                <th>Fila Prevista</th>
+                <th>Executors Busy Prev.</th>
+                <th>CPU Média Prev.</th>
+                <th>Memória Média Prev.</th>
+                <th>Menor Disco Prev.</th>
+              </tr>
+            </thead>
+            <tbody id="forecastTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
+    function getToken() {
+      return (
+        localStorage.getItem("access_token") ||
+        sessionStorage.getItem("access_token") ||
+        localStorage.getItem("token") ||
+        sessionStorage.getItem("token") ||
+        ""
+      );
+    }
+
+    function getAuthHeaders(extraHeaders = {}) {
+      const token = getToken();
+      const headers = { ...extraHeaders };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      return headers;
+    }
+
     function createCard(label, value) {
       return `
         <div class="card">
@@ -566,6 +857,38 @@ class JenkinsDashboardService:
           </div>
         </div>
       `;
+    }
+
+    function fmtNumber(value, suffix = "") {
+      const num = Number(value || 0);
+      return `${num.toFixed(2)}${suffix}`;
+    }
+
+    function fmtDate(value) {
+      if (!value) return "-";
+      try {
+        return new Date(value).toLocaleString("pt-BR");
+      } catch (_) {
+        return value;
+      }
+    }
+
+    function renderSnapshotInfo(dashboard) {
+      const target = document.getElementById("snapshotInfo");
+      const generatedFrom = dashboard.generated_from || "live";
+      const snapshotTime = dashboard.snapshot_time ? fmtDate(dashboard.snapshot_time) : null;
+
+      if (generatedFrom === "snapshot" && snapshotTime) {
+        target.innerHTML = `Origem: último snapshot em ${snapshotTime}`;
+        return;
+      }
+
+      if (generatedFrom === "snapshot") {
+        target.innerHTML = `Origem: último snapshot`;
+        return;
+      }
+
+      target.innerHTML = `Origem: coleta em tempo real`;
     }
 
     function renderCards(cards) {
@@ -640,9 +963,57 @@ class JenkinsDashboardService:
       `).join("");
     }
 
-    async function loadDashboard() {
-      const response = await fetch('/jenkins/capacity/dashboard');
+    function renderHistory(items) {
+      const target = document.getElementById("historyTable");
 
+      if (!items || items.length === 0) {
+        target.innerHTML = `
+          <tr>
+            <td colspan="7" class="muted">Sem snapshots suficientes no histórico.</td>
+          </tr>
+        `;
+        return;
+      }
+
+      target.innerHTML = items.map(item => `
+        <tr>
+          <td>${fmtDate(item.created_at)}</td>
+          <td>${item.agents_online ?? 0} / ${item.agents_total ?? 0}</td>
+          <td>${item.executors_busy ?? 0}</td>
+          <td>${item.queue_total ?? 0}</td>
+          <td>${fmtNumber(item.avg_cpu_operational_percent, '%')}</td>
+          <td>${fmtNumber(item.avg_memory_used_percent, '%')}</td>
+          <td>${fmtNumber(item.min_disk_free_gb, ' GB')}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderForecast(payload) {
+      const target = document.getElementById("forecastTable");
+      const items = payload?.forecast || [];
+
+      if (!items.length) {
+        target.innerHTML = `
+          <tr>
+            <td colspan="6" class="muted">${payload?.message || 'Sem forecast disponível.'}</td>
+          </tr>
+        `;
+        return;
+      }
+
+      target.innerHTML = items.map(item => `
+        <tr>
+          <td>${item.step ?? '-'}</td>
+          <td>${fmtNumber(item.queue_total_pred)}</td>
+          <td>${fmtNumber(item.executors_busy_pred)}</td>
+          <td>${fmtNumber(item.avg_cpu_operational_percent_pred, '%')}</td>
+          <td>${fmtNumber(item.avg_memory_used_percent_pred, '%')}</td>
+          <td>${fmtNumber(item.min_disk_free_gb_pred, ' GB')}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function parseJsonResponse(response) {
       if (!response.ok) {
         let errorText = `HTTP ${response.status}`;
         try {
@@ -651,12 +1022,38 @@ class JenkinsDashboardService:
         } catch (_) {}
         throw new Error(errorText);
       }
-
       return await response.json();
     }
 
+    async function loadDashboard() {
+      const response = await fetch('/jenkins/capacity/dashboard', {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+      return await parseJsonResponse(response);
+    }
+
+    async function loadHistory() {
+      const response = await fetch('/jenkins/capacity/history?limit=10', {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+      return await parseJsonResponse(response);
+    }
+
+    async function loadForecast() {
+      const response = await fetch('/jenkins/capacity/forecast?steps=6', {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+      return await parseJsonResponse(response);
+    }
+
     async function collectNow() {
-      const response = await fetch('/jenkins/capacity/collect', { method: 'POST' });
+      const response = await fetch('/jenkins/capacity/collect', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
 
       if (!response.ok) {
         let errorText = `HTTP ${response.status}`;
@@ -674,7 +1071,11 @@ class JenkinsDashboardService:
 
     async function loadAll() {
       try {
-        const dashboard = await loadDashboard();
+        const [dashboard, history, forecast] = await Promise.all([
+          loadDashboard(),
+          loadHistory(),
+          loadForecast(),
+        ]);
 
         if (dashboard.status !== "OK") {
           document.getElementById("cards").innerHTML = `
@@ -687,14 +1088,20 @@ class JenkinsDashboardService:
           document.getElementById("alerts").innerHTML = "";
           document.getElementById("agentsTable").innerHTML = "";
           document.getElementById("limitations").innerHTML = "";
+          document.getElementById("historyTable").innerHTML = "";
+          document.getElementById("forecastTable").innerHTML = "";
+          document.getElementById("snapshotInfo").innerHTML = "Erro ao carregar origem dos dados";
           return;
         }
 
+        renderSnapshotInfo(dashboard);
         renderCards(dashboard.cards || {});
         renderIndicators(dashboard.indicators || {}, dashboard.summary || {});
         renderAlerts(dashboard.alerts || []);
         renderAgents(dashboard.agents || []);
         renderLimitations(dashboard.limitations || []);
+        renderHistory(history.items || []);
+        renderForecast(forecast || {});
       } catch (error) {
         document.getElementById("cards").innerHTML = `
           <div class="panel">
@@ -706,6 +1113,13 @@ class JenkinsDashboardService:
         document.getElementById("alerts").innerHTML = "";
         document.getElementById("agentsTable").innerHTML = "";
         document.getElementById("limitations").innerHTML = "";
+        document.getElementById("historyTable").innerHTML = `
+          <tr><td colspan="7" class="muted">Falha ao carregar histórico.</td></tr>
+        `;
+        document.getElementById("forecastTable").innerHTML = `
+          <tr><td colspan="6" class="muted">Falha ao carregar forecast.</td></tr>
+        `;
+        document.getElementById("snapshotInfo").innerHTML = "Erro ao carregar origem dos dados";
       }
     }
 

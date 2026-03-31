@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,26 @@ def get_jenkins_dashboard(
 ):
     service = JenkinsDashboardService(db)
     return service.get_dashboard_data()
+
+
+@router.get("/capacity/history")
+def get_jenkins_history(
+    limit: int = Query(default=30, ge=1, le=500),
+    db: Session = Depends(get_db),
+    #user=Depends(get_current_user),
+):
+    service = JenkinsDashboardService(db)
+    return service.get_history(limit)
+
+
+@router.get("/capacity/forecast")
+def get_jenkins_forecast(
+    steps: int = Query(default=6, ge=1, le=24),
+    db: Session = Depends(get_db),
+    #user=Depends(get_current_user),
+):
+    service = JenkinsDashboardService(db)
+    return service.get_forecast(steps)
 
 
 @router.get("/capacity/dashboard/html", response_class=HTMLResponse)
