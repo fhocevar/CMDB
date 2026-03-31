@@ -47,6 +47,16 @@ def get_jenkins_forecast(
     return service.get_forecast(steps)
 
 
+@router.get("/capacity/forecast/agents")
+def get_jenkins_agents_forecast(
+    steps: int = Query(default=6, ge=1, le=24),
+    db: Session = Depends(get_db),
+    #user=Depends(get_current_user),
+):
+    service = JenkinsDashboardService(db)
+    return service.get_agents_forecast(steps)
+
+
 @router.get("/capacity/dashboard/html", response_class=HTMLResponse)
 def get_jenkins_dashboard_html(
     db: Session = Depends(get_db),
