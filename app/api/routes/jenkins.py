@@ -13,7 +13,7 @@ router = APIRouter(prefix="/jenkins", tags=["Jenkins"])
 @router.post("/capacity/collect")
 def collect_jenkins_capacity(
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    #user=Depends(get_current_user),
 ):
     return collect_from_jenkins(db)
 
@@ -21,7 +21,7 @@ def collect_jenkins_capacity(
 @router.get("/capacity/dashboard")
 def get_jenkins_dashboard(
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    #user=Depends(get_current_user),
 ):
     service = JenkinsDashboardService(db)
     return service.get_dashboard_data()
@@ -30,7 +30,7 @@ def get_jenkins_dashboard(
 @router.get("/capacity/dashboard/html", response_class=HTMLResponse)
 def get_jenkins_dashboard_html(
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    #user=Depends(get_current_user), (utilização de token autenticação)
 ):
     service = JenkinsDashboardService(db)
     return service.render_dashboard_html()
