@@ -268,7 +268,7 @@ class JenkinsDashboardService:
 
     .grid-panels {
       display: grid;
-      grid-template-columns: 1.2fr 1fr;
+      grid-template-columns: 1fr;
       gap: 18px;
       margin-bottom: 18px;
     }
@@ -459,13 +459,12 @@ class JenkinsDashboardService:
           </table>
         </div>
       </div>
+    </div>
 
       <div class="panel">
         <h3>Limitações técnicas</h3>
         <div id="limitations" class="limitations"></div>
       </div>
-    </div>
-  </div>
 
   <script>
     function createCard(label, value) {
