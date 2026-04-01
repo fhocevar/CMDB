@@ -13,8 +13,8 @@ class JenkinsJobsDashboardService:
         self.jobs_service = JenkinsJobsCapacityService(db)
 
     def get_dashboard_data(self) -> dict[str, Any]:
-        summary_payload = self.jobs_service.get_jobs_summary(limit=500)
-        history_payload = self.jobs_service.get_jobs_history(limit=200)
+        summary_payload = self.jobs_service.get_jobs_summary(limit=1000)
+        history_payload = self.jobs_service.get_jobs_history(limit=500)
 
         jobs = summary_payload.get("jobs", [])
         history_items = history_payload.get("items", [])
@@ -576,7 +576,7 @@ class JenkinsJobsDashboardService:
     }
 
     async function collectNow() {
-      const response = await fetch('/jenkins/jobs/collect?max_jobs=50', { method: 'POST' });
+      const response = await fetch('/jenkins/jobs/collect?max_jobs=500', { method: 'POST' });
 
       if (!response.ok) {
         let errorText = `HTTP ${response.status}`;

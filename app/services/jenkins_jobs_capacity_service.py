@@ -15,7 +15,7 @@ class JenkinsJobsCapacityService:
     def __init__(self, db: Session):
         self.db = db
 
-    def collect_and_persist_jobs_snapshot(self, max_jobs: int = 20) -> dict[str, Any]:
+    def collect_and_persist_jobs_snapshot(self, max_jobs: int = 500) -> dict[str, Any]:
         data = self._collect_jobs_from_jenkins(max_jobs=max_jobs)
 
         jobs = data.get("jobs", [])
@@ -223,7 +223,7 @@ class JenkinsJobsCapacityService:
             "jobs": jobs,
         }
 
-    def _collect_jobs_from_jenkins(self, max_jobs: int = 20) -> dict[str, Any]:
+    def _collect_jobs_from_jenkins(self, max_jobs: int = 500) -> dict[str, Any]:
         base_url = str(settings.JENKINS_URL).rstrip("/")
         auth = None
 
